@@ -1,12 +1,3 @@
-# Dependencies
-node_modules/
-website/node_modules/
-
-# Build outputs
-dist/
-website/dist/
-dist-ssr/
-
 # Logs
 logs
 *.log
@@ -16,10 +7,10 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-# Environment variables
-.env
-.env.local
-.env.production
+node_modules
+dist
+dist-ssr
+*.local
 
 # Editor directories and files
 .vscode/*
@@ -31,9 +22,3 @@ lerna-debug.log*
 *.njsproj
 *.sln
 *.sw?
-
-# OS files
-Thumbs.db
-
-# Vercel
-.vercel
