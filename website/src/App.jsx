@@ -5,7 +5,7 @@ import { FileText, Eye, Shield, Hash, ArrowLeft, Send, Search, Menu, X, Globe, U
 import ARCHIVE_DATA from '../../archives/registry.js';
 
 // 导入评论服务
-import { getComments, addComment, addReply, subscribeToComments } from './services/commentService.js';
+import { getComments, addComment, addReply, subscribeToComments, getUnreadNotifications, markNotificationAsRead } from './services/commentService.js';
 
 // --- 1. 分类定义 ---
 const CATEGORIES = [
@@ -16,29 +16,47 @@ const CATEGORIES = [
   { id: 'event', label: '未解事件 // EVENTS' }
 ];
 
-// --- 2. 评论组件 ---
-const CommentThread = ({ comment, currentUserAgent, onReply }) => {
+// --- 2. 评论组件（支持回复任意评论）---
+const CommentThread = ({ comment, currentUserAgent, onReply, isHighlighted }) => {
   const [isReplying, setIsReplying] = useState(false);
   const [replyText, setReplyText] = useState("");
   const [isExpanded, setIsExpanded] = useState(false);
+  const [replyingTo, setReplyingTo] = useState(null); // 记录正在回复谁
 
   const visibleReplies = isExpanded ? comment.replies : comment.replies.slice(0, 3);
   const hasHiddenReplies = comment.replies.length > 3;
 
   const handleSubmitReply = () => {
     if (!replyText.trim()) return;
-    onReply(comment.id, replyText);
+    const targetAgent = replyingTo || comment.agent;
+    onReply(comment.id, replyText, targetAgent);
     setReplyText("");
     setIsReplying(false);
+    setReplyingTo(null);
     setIsExpanded(true);
   };
 
+  const handleReplyToMain = () => {
+    setReplyingTo(null);
+    setIsReplying(true);
+  };
+
+  const handleReplyToReply = (replyAgent) => {
+    setReplyingTo(replyAgent);
+    setIsReplying(true);
+  };
+
   return (
-    <div className="border-b border-gray-200 pb-6 mb-6 last:border-0 font-mono">
+    <div 
+      id={`comment-${comment.id}`}
+      className={`border-b border-gray-200 pb-6 mb-6 last:border-0 font-mono transition-all duration-500 ${
+        isHighlighted ? 'bg-yellow-50 border-yellow-300 -mx-4 px-4 py-4' : ''
+      }`}
+    >
       <div className="group">
         <div className="flex items-center justify-between mb-2">
           <div className="flex items-center gap-2 text-xs">
-            <span className="font-bold bg-black text-white px-2 py-0.5">#{comment.id}F</span>
+            <span className="font-bold bg-black text-white px-2 py-0.5">#{comment.floorNumber}F</span>
             <span className="font-bold text-black">
               [{comment.agent}]
               {comment.agent === currentUserAgent && <span className="text-blue-600 ml-1">(我)</span>}
@@ -46,7 +64,7 @@ const CommentThread = ({ comment, currentUserAgent, onReply }) => {
             <span className="text-gray-400">{comment.time}</span>
           </div>
           <button 
-            onClick={() => setIsReplying(!isReplying)}
+            onClick={handleReplyToMain}
             className="text-xs flex items-center gap-1 text-gray-400 hover:text-black transition-colors"
           >
             <MessageSquare size={12} /> 回复
@@ -64,12 +82,12 @@ const CommentThread = ({ comment, currentUserAgent, onReply }) => {
             <textarea 
               autoFocus
               className="w-full bg-gray-50 border border-black p-2 text-xs focus:outline-none min-h-[60px]"
-              placeholder={`回复 ${comment.agent}...`}
+              placeholder={`回复 ${replyingTo || comment.agent}...`}
               value={replyText}
               onChange={(e) => setReplyText(e.target.value)}
             />
             <div className="flex justify-end mt-1 gap-2">
-              <button onClick={() => setIsReplying(false)} className="text-xs text-gray-500 hover:text-black">
+              <button onClick={() => { setIsReplying(false); setReplyingTo(null); }} className="text-xs text-gray-500 hover:text-black">
                 取消
               </button>
               <button onClick={handleSubmitReply} className="text-xs bg-black text-white px-3 py-1 font-bold">
@@ -84,12 +102,23 @@ const CommentThread = ({ comment, currentUserAgent, onReply }) => {
         <div className="ml-4 md:ml-8 border-l-2 border-gray-100 pl-4 space-y-3 mt-3">
           {visibleReplies.map(reply => (
             <div key={reply.id} className="text-xs group/reply">
-              <div className="flex items-center gap-2 mb-1 text-gray-500">
-                <span className="font-bold text-gray-700 bg-gray-100 px-1">
-                  [{reply.agent}]
-                  {reply.agent === currentUserAgent && <span className="text-blue-600 ml-1">(我)</span>}
-                </span>
-                <span>{reply.time}</span>
+              <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center gap-2 text-gray-500">
+                  <span className="font-bold text-gray-700 bg-gray-100 px-1">
+                    [{reply.agent}]
+                    {reply.agent === currentUserAgent && <span className="text-blue-600 ml-1">(我)</span>}
+                  </span>
+                  {reply.repliedToAgent && (
+                    <span className="text-gray-400">回复 [{reply.repliedToAgent}]</span>
+                  )}
+                  <span>{reply.time}</span>
+                </div>
+                <button 
+                  onClick={() => handleReplyToReply(reply.agent)}
+                  className="opacity-0 group-hover/reply:opacity-100 text-gray-400 hover:text-black transition-all"
+                >
+                  <MessageSquare size={10} />
+                </button>
               </div>
               <div className="text-gray-600 group-hover/reply:text-black transition-colors">
                 {reply.content}
@@ -129,6 +158,8 @@ export default function MysteryArchive() {
   const [scrollProgress, setScrollProgress] = useState(0);
   const [allComments, setAllComments] = useState({}); // 改为对象，key 是档案 ID
   const [newMainComment, setNewMainComment] = useState("");
+  const [notifications, setNotifications] = useState([]); // 通知列表
+  const [highlightCommentId, setHighlightCommentId] = useState(null); // 高亮的评论 ID
 
   // 获取当前档案的评论
   const getCurrentComments = () => {
@@ -144,6 +175,8 @@ export default function MysteryArchive() {
     if (storedAgent && storedName) {
       setAgentId(storedAgent);
       setAgentName(storedName);
+      // 加载未读通知
+      getUnreadNotifications(storedName).then(setNotifications);
     } else {
       const codeNames = ["夜枭", "苍狼", "幽灵", "蝰蛇", "渡鸦", "红隼"];
       const randomCode = Math.floor(100 + Math.random() * 900);
@@ -168,6 +201,18 @@ export default function MysteryArchive() {
         ...prev,
         [activeItem.id]: comments
       }));
+      
+      // 如果有高亮评论，滚动到该评论
+      if (highlightCommentId) {
+        setTimeout(() => {
+          const commentElement = document.getElementById(`comment-${highlightCommentId}`);
+          if (commentElement) {
+            commentElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            // 3秒后取消高亮
+            setTimeout(() => setHighlightCommentId(null), 3000);
+          }
+        }, 500);
+      }
     });
     
     // 订阅实时更新
@@ -181,7 +226,7 @@ export default function MysteryArchive() {
     return () => {
       subscription.unsubscribe();
     };
-  }, [activeItem, currentView]);
+  }, [activeItem, currentView, highlightCommentId]);
 
   // 滚动监听
   useEffect(() => {
@@ -227,10 +272,10 @@ export default function MysteryArchive() {
     }
   };
 
-  const handleReplyToComment = async (parentId, content) => {
+  const handleReplyToComment = async (parentId, content, repliedToAgent) => {
     if (!activeItem) return;
     
-    const newReply = await addReply(parentId, agentName, content, activeItem.id);
+    const newReply = await addReply(parentId, agentName, content, activeItem.id, repliedToAgent);
     
     if (newReply) {
       const currentComments = getCurrentComments();
@@ -267,6 +312,22 @@ export default function MysteryArchive() {
     });
   };
 
+  // 处理通知点击，跳转到对应档案并定位评论
+  const handleNotificationClick = (notification) => {
+    const archive = ARCHIVE_DATA.find(item => item.id === notification.archiveId);
+    if (archive) {
+      // 标记为已读
+      markNotificationAsRead(notification.id);
+      // 更新通知列表
+      setNotifications(prev => prev.filter(n => n.id !== notification.id));
+      // 设置高亮评论
+      setHighlightCommentId(notification.parentCommentId);
+      // 关闭弹窗并跳转
+      setShowIdentityModal(false);
+      handleOpenDetail(archive);
+    }
+  };
+
   // 身份弹窗
   const IdentityModal = () => {
     if (!showIdentityModal) return null;
@@ -299,6 +360,36 @@ export default function MysteryArchive() {
                 </div>
               </div>
             </div>
+
+            {/* 通知区域 */}
+            {notifications.length > 0 && (
+              <div className="border border-blue-300 bg-blue-50 p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <MessageSquare size={14} className="text-blue-600" />
+                  <span className="text-xs font-bold text-blue-900">收到 {notifications.length} 条新回复</span>
+                </div>
+                <div className="space-y-2 max-h-40 overflow-y-auto">
+                  {notifications.slice(0, 5).map(notif => (
+                    <div 
+                      key={notif.id} 
+                      onClick={() => handleNotificationClick(notif)}
+                      className="text-xs bg-white p-2 border border-blue-200 cursor-pointer hover:bg-blue-50 hover:border-blue-400 transition-colors"
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-blue-700">[{notif.fromAgent}]</span>
+                          <span className="text-gray-400">{notif.time}</span>
+                        </div>
+                        <ArrowLeft className="rotate-180 text-blue-400" size={10} />
+                      </div>
+                      <div className="text-gray-600 line-clamp-2 mb-1">{notif.content}</div>
+                      <div className="text-[10px] text-gray-400 uppercase">档案: {notif.archiveId}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <div className="bg-red-50 border border-red-200 p-3 text-xs text-red-800 flex gap-2 items-start">
               <Shield size={14} className="mt-0.5 shrink-0" />
               <p>
@@ -388,8 +479,13 @@ export default function MysteryArchive() {
           ))}
         </nav>
         
-        <div className="p-4 border-t border-black bg-gray-100 cursor-pointer hover:bg-gray-200 transition-colors" 
+        <div className="p-4 border-t border-black bg-gray-100 cursor-pointer hover:bg-gray-200 transition-colors relative" 
              onClick={() => setShowIdentityModal(true)}>
+          {notifications.length > 0 && (
+            <div className="absolute top-2 right-2 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full animate-pulse">
+              {notifications.length}
+            </div>
+          )}
           <div className="text-[10px] text-gray-500 uppercase mb-1">Current Agent</div>
           <div className="flex items-center gap-2 font-bold text-sm truncate">
             <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
@@ -491,8 +587,13 @@ export default function MysteryArchive() {
             <span className="font-mono text-xs text-gray-500">{activeItem.id}</span>
           </div>
           
-          <div className="flex items-center gap-2 cursor-pointer hover:bg-gray-100 px-2 py-1 transition-colors" 
+          <div className="flex items-center gap-2 cursor-pointer hover:bg-gray-100 px-2 py-1 transition-colors relative" 
                onClick={() => setShowIdentityModal(true)}>
+            {notifications.length > 0 && (
+              <div className="absolute -top-1 -right-1 bg-red-500 text-white text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center animate-pulse">
+                {notifications.length}
+              </div>
+            )}
             <span className="text-xs font-mono hidden md:inline">当前代号：{agentName}</span>
             <Shield size={14} />
           </div>
@@ -570,6 +671,7 @@ export default function MysteryArchive() {
                   comment={comment} 
                   currentUserAgent={agentName}
                   onReply={handleReplyToComment}
+                  isHighlighted={highlightCommentId === comment.id}
                 />
               ))}
             </div>
