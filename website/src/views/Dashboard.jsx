@@ -35,7 +35,7 @@ export const Dashboard = ({ agentName, onOpenDetail, onOpenIdentity }) => {
       <div className={`fixed inset-0 z-30 bg-white md:static md:w-64 md:border-r md:border-black flex flex-col transition-transform duration-300 ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
         <div className="p-6 border-b border-black hidden md:block">
           <h2 className="text-2xl font-bold tracking-tighter flex items-center gap-2">
-            <Globe size={20} /> 收录馆
+            <Globe size={20} /> 档案馆
           </h2>
         </div>
         <nav className="flex-1 overflow-y-auto p-4 space-y-2">
